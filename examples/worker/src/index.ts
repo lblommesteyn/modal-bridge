@@ -28,6 +28,7 @@ export default {
       if (match?.[2] && request.method === "POST") return Response.json(await client.cancel(match[1]));
       return Response.json({ error: "Not found" }, { status: 404 });
     } catch (error) {
+      console.error("Gateway request failed:", error instanceof Error ? error.message : "Unknown error");
       return Response.json({ error: error instanceof BridgeError ? error.message : "Gateway request failed" },
         { status: error instanceof BridgeError ? error.status : 502 });
     }

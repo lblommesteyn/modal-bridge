@@ -2,10 +2,17 @@
   "name": "modal-bridge-workspace",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/client", "examples/worker"],
+  "workspaces": [
+    "packages/client",
+    "examples/worker"
+  ],
   "scripts": {
     "build": "tsc -p packages/client && tsc -p examples/worker --noEmit",
-    "test": "npm run build && node --test packages/client/test/*.test.mjs"
+    "test": "npm run build && node --test packages/client/test/*.test.mjs",
+    "test:workers": "node --test packages/client/test/workers.integration.mjs"
   },
-  "devDependencies": {"typescript": "^5.9.3"}
+  "devDependencies": {
+    "miniflare": "5.20261109.0-beta",
+    "typescript": "^5.9.3"
+  }
 }

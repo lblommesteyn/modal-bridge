@@ -6,6 +6,7 @@ Before opening a pull request:
 ```sh
 uv run pytest -q
 npm test
+npm run test:workers
 cd examples/worker && npx wrangler deploy --dry-run
 ```
 

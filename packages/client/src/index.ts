@@ -27,14 +27,14 @@ export class ModalBridge<Functions extends { [K in keyof Functions]: Definition 
     if (url.username || url.password || url.search || url.hash) throw new Error("Invalid gateway URL");
     this.base = url.href.replace(/\/$/, "");
     this.token = options.token;
-    this.transport = options.fetch ?? fetch;
+    this.transport = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${this.token}`);
     headers.set("Accept", "application/json");
     if (init.body) headers.set("Content-Type", "application/json");
-    const response = await this.transport(this.base + path, { ...init, headers, redirect: "error" });
+    const response = await this.transport(this.base + path, { ...init, headers, redirect: "manual" });
     if (!response.ok) {
       const body = await response.json().catch(() => null) as { detail?: unknown } | null;
       throw new BridgeError(typeof body?.detail === "string" ? body.detail : `Gateway HTTP ${response.status}`, response.status);

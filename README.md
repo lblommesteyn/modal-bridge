@@ -213,6 +213,7 @@ allowlisted functions and workspace. This is not an untrusted-code execution API
 uv run pytest -q
 uv run python scripts/export_openapi.py
 npm test
+npm run test:workers
 cd examples/worker
 npx wrangler deploy --dry-run
 ```
