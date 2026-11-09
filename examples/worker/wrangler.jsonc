@@ -1,0 +1,6 @@
+{
+  "name": "modal-bridge-example",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-09",
+  "vars": {"BRIDGE_URL": "https://replace-with-your-gateway.example"}
+}

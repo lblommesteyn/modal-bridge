@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="460" viewBox="0 0 1120 460" role="img" aria-labelledby="title desc">
+<title id="title">Modal Bridge architecture</title><desc id="desc">A Cloudflare Worker sends authenticated HTTPS requests to a Python gateway. The gateway stores job records in SQLite and calls Modal using the Python SDK. Modal credentials remain inside the gateway.</desc>
+<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 7 3.5 0 7" fill="none" stroke="#667085"/></marker></defs>
+<rect width="1120" height="460" rx="12" fill="#fafaf9"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="40" y="44" fill="#737373" font-size="12" letter-spacing="2">MODAL BRIDGE / REQUEST PATH</text>
+<text x="40" y="83" fill="#171717" font-size="28" font-weight="700">Your Worker speaks HTTP. Modal runs the job.</text>
+<rect x="40" y="128" width="250" height="145" rx="8" fill="white" stroke="#d4d4d4"/>
+<rect x="40" y="128" width="4" height="145" fill="#e57937"/>
+<text x="62" y="158" fill="#737373" font-size="11" letter-spacing="1.5">EDGE</text>
+<text x="62" y="190" fill="#171717" font-size="20" font-weight="700">Cloudflare Worker</text>
+<text x="62" y="218" fill="#525252" font-size="14">Typed client · native fetch</text>
+<text x="62" y="245" fill="#737373" font-size="12">Holds a gateway token</text>
+<path d="M290 204 H421" stroke="#667085" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="356" y="187" text-anchor="middle" fill="#525252" font-size="12">HTTPS + JSON</text>
+<rect x="430" y="128" width="270" height="145" rx="8" fill="white" stroke="#a3a3a3"/>
+<text x="452" y="158" fill="#737373" font-size="11" letter-spacing="1.5">YOUR HOST</text>
+<text x="452" y="190" fill="#171717" font-size="20" font-weight="700">Python gateway</text>
+<text x="452" y="218" fill="#525252" font-size="14">Authenticate · allowlist · submit</text>
+<text x="452" y="245" fill="#737373" font-size="12">Modal credentials stay here</text>
+<path d="M700 204 H831" stroke="#667085" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="766" y="187" text-anchor="middle" fill="#525252" font-size="12">Modal SDK</text>
+<rect x="840" y="128" width="240" height="145" rx="8" fill="white" stroke="#d4d4d4"/>
+<rect x="1076" y="128" width="4" height="145" fill="#55956b"/>
+<text x="862" y="158" fill="#737373" font-size="11" letter-spacing="1.5">COMPUTE</text>
+<text x="862" y="190" fill="#171717" font-size="20" font-weight="700">Modal function</text>
+<text x="862" y="218" fill="#525252" font-size="14">One JSON input → result</text>
+<text x="862" y="245" fill="#737373" font-size="12">CPU or GPU workload</text>
+<path d="M565 273 V309" stroke="#667085" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="430" y="318" width="270" height="72" rx="8" fill="#f0f0ed" stroke="#d4d4d4"/>
+<text x="452" y="346" fill="#171717" font-size="15" font-weight="700">SQLite · persistent local disk</text>
+<text x="452" y="370" fill="#525252" font-size="12">Job IDs, request keys, cached results</text>
+<path d="M40 416 H1080" stroke="#dededb"/>
+<text x="40" y="441" fill="#737373" font-size="12">v0.1 · one gateway replica · one trusted workspace</text>
+<text x="1080" y="441" text-anchor="end" fill="#737373" font-size="12">No Node compatibility required in the Worker</text>
+</g></svg>

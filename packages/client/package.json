@@ -1,0 +1,26 @@
+{
+  "name": "@modal-bridge/client",
+  "version": "0.1.0",
+  "description": "Fetch-only typed client for the unofficial Modal Bridge gateway",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lblommesteyn/modal-bridge.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/lblommesteyn/modal-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/lblommesteyn/modal-bridge/issues"
+  }
+}

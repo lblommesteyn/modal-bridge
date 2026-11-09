@@ -1,0 +1,12 @@
+.git
+.venv
+node_modules
+**/node_modules
+.env
+**/.dev.vars
+data
+**/__pycache__
+dist
+
+.env.*
+*.tgz

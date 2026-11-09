@@ -1,0 +1,11 @@
+{
+  "name": "modal-bridge-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/client", "examples/worker"],
+  "scripts": {
+    "build": "tsc -p packages/client && tsc -p examples/worker --noEmit",
+    "test": "npm run build && node --test packages/client/test/*.test.mjs"
+  },
+  "devDependencies": {"typescript": "^5.9.3"}
+}

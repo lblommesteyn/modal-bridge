@@ -1,0 +1,502 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Modal Bridge",
+    "summary": "An HTTP job API for Modal and edge runtimes",
+    "description": "Submit an allowlisted function, keep its job ID, and poll for a result. Use **Authorize** with your gateway token (without the Bearer prefix). Reuse the same Idempotency-Key when retrying a submission. This API serves one trusted workspace; it is not a multi-tenant API.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Check gateway liveness",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Submit an allowlisted function",
+        "description": "Returns the original job for a repeated key and identical input. A 202 response does not guarantee submission succeeded: inspect status. Never automatically retry submission_unknown with a new key.",
+        "operationId": "submitJob",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Stable unique request key. Reuse it for retries of the same input.",
+              "examples": [
+                "square-demo-001"
+              ],
+              "title": "Idempotency-Key"
+            },
+            "description": "Stable unique request key. Reuse it for retries of the same input."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Submission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid gateway bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job or function alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Key already used with different input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Poll a job and retrieve its result",
+        "description": "Refreshes pending work from Modal and caches terminal results. A 502 is a polling failure, not a failed job; retry this GET.",
+        "operationId": "getJob",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid gateway bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job or function alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Modal unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Request job cancellation",
+        "description": "Best effort. A job can finish while cancellation is being requested. Does not terminate containers shared with other jobs.",
+        "operationId": "cancelJob",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid gateway bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job or function alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Cancellation outcome uncertain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "APIError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "APIError"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Health": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "Health"
+      },
+      "Job": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Gateway job ID; distinct from a Modal call ID"
+          },
+          "function": {
+            "type": "string",
+            "title": "Function",
+            "description": "Allowlisted function alias"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "submitting",
+              "submission_unknown",
+              "pending",
+              "succeeded",
+              "failed",
+              "expired",
+              "cancel_requested"
+            ],
+            "title": "Status"
+          },
+          "result": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Present on success; JSON null is a valid result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Sanitized failure description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "function",
+          "status"
+        ],
+        "title": "Job",
+        "description": "A durable gateway job. `pending` includes both queued and running work.",
+        "examples": [
+          {
+            "function": "square",
+            "id": "a7bdf038-4594-4a30-b498-367005e7b561",
+            "status": "pending"
+          },
+          {
+            "function": "square",
+            "id": "a7bdf038-4594-4a30-b498-367005e7b561",
+            "result": {
+              "value": 144
+            },
+            "status": "succeeded"
+          }
+        ]
+      },
+      "JsonValue": {},
+      "Submission": {
+        "properties": {
+          "function": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Function"
+          },
+          "input": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "function",
+          "input"
+        ],
+        "title": "Submission",
+        "examples": [
+          {
+            "function": "square",
+            "input": {
+              "value": 12
+            }
+          }
+        ]
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "GatewayToken": {
+        "type": "http",
+        "description": "Your BRIDGE_TOKEN. Enter the token only; Swagger adds Bearer.",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Jobs",
+      "description": "Submit, inspect, and request cancellation."
+    },
+    {
+      "name": "Operations",
+      "description": "Gateway health; no Modal compute is invoked."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+services:
+  gateway:
+    build: .
+    ports: ["127.0.0.1:8000:8000"]
+    env_file: .env
+    volumes: ["bridge-data:/data"]
+    restart: unless-stopped
+volumes:
+  bridge-data:

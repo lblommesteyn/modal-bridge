@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="390" viewBox="0 0 1120 390" role="img" aria-labelledby="title desc">
+<title id="title">Submit once, poll by ID</title><desc id="desc">The client submits a request with an idempotency key and receives a job ID. It polls pending jobs until a result is returned. Retrying the same input with the same key returns the original job, while uncertain submissions require inspection.</desc>
+<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 7 3.5 0 7" fill="none" stroke="#667085"/></marker></defs>
+<rect width="1120" height="390" rx="12" fill="#fafaf9"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="40" y="42" fill="#737373" font-size="12" letter-spacing="2">THE JOB CONTRACT</text>
+<text x="40" y="80" fill="#171717" font-size="28" font-weight="700">Submit once. Keep the ID. Poll for the result.</text>
+<g fill="white" stroke="#d4d4d4"><rect x="40" y="118" width="300" height="144" rx="8"/><rect x="410" y="118" width="300" height="144" rx="8"/><rect x="780" y="118" width="300" height="144" rx="8"/></g>
+<g fill="#737373" font-size="12"><text x="60" y="145">01 / SUBMIT</text><text x="430" y="145">02 / POLL</text><text x="800" y="145">03 / READ</text></g>
+<g font-family="Menlo, Consolas, monospace" font-size="15" fill="#171717"><text x="60" y="179">POST /v1/jobs</text><text x="430" y="179">GET /v1/jobs/{id}</text><text x="800" y="179">status: succeeded</text></g>
+<g fill="#525252" font-size="14"><text x="60" y="211">Input + stable request key</text><text x="60" y="239">202 → job ID + current status</text><text x="430" y="211">pending → poll again</text><text x="430" y="239">No HTTP request held open</text><text x="800" y="211">Read the cached JSON result</text><text x="800" y="239">Handle failed / expired explicitly</text></g>
+<g stroke="#667085" stroke-width="1.5" marker-end="url(#arrow)"><path d="M340 188 H400"/><path d="M710 188 H770"/></g>
+<path d="M40 294 H1080" stroke="#dededb"/>
+<text x="40" y="322" fill="#171717" font-size="14" font-weight="700">Retrying a request?</text><text x="218" y="322" fill="#525252" font-size="14">Same key + same input returns the original job.</text>
+<text x="40" y="352" fill="#171717" font-size="14" font-weight="700">Outcome uncertain?</text><text x="218" y="352" fill="#525252" font-size="14">Inspect Modal before creating a new key. This is not exactly-once execution.</text>
+</g></svg>
