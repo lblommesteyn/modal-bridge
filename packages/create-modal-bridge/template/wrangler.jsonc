@@ -1,0 +1,9 @@
+{
+  "name": "modal-bridge-app",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-09",
+  "vars": {
+    "BRIDGE_URL": "https://replace-with-your-gateway.modal.run",
+    "BRIDGE_FUNCTION": "replace-with-your-alias"
+  }
+}
