@@ -3,12 +3,12 @@
   "info": {
     "title": "Modal Bridge",
     "summary": "An HTTP job API for Modal and edge runtimes",
-    "description": "Submit an allowlisted function, keep its job ID, and poll for a result. Use **Authorize** with your gateway token (without the Bearer prefix). Reuse the same Idempotency-Key when retrying a submission. This API serves one trusted workspace; it is not a multi-tenant API.",
+    "description": "Submit an allowlisted function, keep its job ID, and either poll for the result or receive a signed completion callback. Use **Authorize** with your gateway token (without the Bearer prefix). Reuse the same Idempotency-Key when retrying a submission. This API serves one trusted workspace; it is not a multi-tenant API.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/health": {
@@ -38,7 +38,7 @@
           "Jobs"
         ],
         "summary": "Submit an allowlisted function",
-        "description": "Returns the original job for a repeated key and identical input. A 202 response does not guarantee submission succeeded: inspect status. Never automatically retry submission_unknown with a new key.",
+        "description": "Returns the original job for a repeated key and identical input. A 202 response does not guarantee submission succeeded: inspect status. Never automatically retry submission_unknown with a new key. With on_complete, the gateway POSTs one signed event when the job settles.",
         "operationId": "submitJob",
         "security": [
           {
@@ -61,6 +61,26 @@
               "title": "Idempotency-Key"
             },
             "description": "Stable unique request key. Reuse it for retries of the same input."
+          },
+          {
+            "name": "bridge-owner",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional end-user or tenant ID, set by your backend. Used for quotas and filtering; it is not authentication.",
+              "title": "Bridge-Owner"
+            },
+            "description": "Optional end-user or tenant ID, set by your backend. Used for quotas and filtering; it is not authentication."
           }
         ],
         "requestBody": {
@@ -116,6 +136,127 @@
           },
           "413": {
             "description": "Body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Owner quota reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway concurrency limit reached; nothing was submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "List jobs, newest first",
+        "description": "Results are omitted; read a job by ID for its result. A Modal-hosted gateway lists unsettled jobs only.",
+        "operationId": "listJobs",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "submitting",
+                    "submission_unknown",
+                    "pending",
+                    "succeeded",
+                    "failed",
+                    "expired",
+                    "cancel_requested"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid gateway bearer token",
             "content": {
               "application/json": {
                 "schema": {
@@ -202,6 +343,16 @@
               }
             }
           },
+          "503": {
+            "description": "Gateway concurrency limit reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -221,7 +372,7 @@
           "Jobs"
         ],
         "summary": "Request job cancellation",
-        "description": "Best effort. A job can finish while cancellation is being requested. Does not terminate containers shared with other jobs.",
+        "description": "Best effort. A job can finish while cancellation is being requested, so cancel_requested is not final: keep polling (or wait for the callback) until the job is succeeded, failed or expired. Does not terminate containers shared with other jobs.",
         "operationId": "cancelJob",
         "security": [
           {
@@ -302,6 +453,514 @@
           }
         }
       }
+    },
+    "/v1/jobs/{job_id}/resolve": {
+      "post": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Settle a job whose submission outcome is uncertain",
+        "description": "For submission_unknown jobs, and reservations stuck in submitting. Look for the call in Modal first. **attach** records a call you found. **abandon** marks the job failed. **resubmit** spawns it again and is the only action that can run the work twice, so it requires the original input.",
+        "operationId": "resolveJob",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Resolution"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid gateway bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job or function alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job is not awaiting resolution, or input does not match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Modal could not verify the call ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Job counts and Modal call latency",
+        "description": "Latency covers this process since it started. A Modal-hosted gateway counts unsettled jobs only (`scope: unsettled`).",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Getmetrics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid gateway bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/preview": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Preview reuse without submitting work",
+        "operationId": "preview_v1_runs_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ]
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Create a persistent versioned run",
+        "operationId": "create_v1_runs_post",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunSpec"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Get progress counts",
+        "operationId": "get_v1_runs__run_id__get",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{run_id}/items": {
+      "get": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Inspect persisted inputs, results, lineage and attempts",
+        "operationId": "items_v1_runs__run_id__items_get",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{run_id}/pause": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Stop dispatching new items; active work continues",
+        "operationId": "pause_v1_runs__run_id__pause_post",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{run_id}/resume": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Resume dispatching queued items",
+        "operationId": "resume_v1_runs__run_id__resume_post",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{run_id}/retry-failed": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Retry confirmed failures, preserving successes and attempt history",
+        "operationId": "retry_v1_runs__run_id__retry_failed_post",
+        "security": [
+          {
+            "GatewayToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Replay"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -318,6 +977,86 @@
           "detail"
         ],
         "title": "APIError"
+      },
+      "Callback": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Url",
+            "description": "HTTPS endpoint that receives one signed POST when the job settles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "Callback"
+      },
+      "CallbackState": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "pending",
+              "delivered",
+              "failed"
+            ],
+            "title": "Status",
+            "description": "waiting: job not settled. pending: delivery due or being retried"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "status",
+          "attempts"
+        ],
+        "title": "CallbackState"
       },
       "HTTPValidationError": {
         "properties": {
@@ -344,6 +1083,26 @@
           "ok"
         ],
         "title": "Health"
+      },
+      "Item": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "input": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "input"
+        ],
+        "title": "Item"
       },
       "Job": {
         "properties": {
@@ -385,6 +1144,99 @@
             ],
             "title": "Error",
             "description": "Sanitized failure description"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target",
+            "description": "Modal app/function the alias resolved to at submission"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner",
+            "description": "Caller-supplied Bridge-Owner value"
+          },
+          "call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Id",
+            "description": "Modal FunctionCall ID, for finding the call in Modal"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At",
+            "description": "Unix seconds; reservation time"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At",
+            "description": "Unix seconds; Modal accepted the call"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At",
+            "description": "Unix seconds; the gateway recorded a settled state"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "callback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallbackState"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -411,7 +1263,284 @@
           }
         ]
       },
+      "JobList": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "title": "JobList"
+      },
       "JsonValue": {},
+      "Preview": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "reusable": {
+            "type": "integer",
+            "title": "Reusable"
+          },
+          "to_compute": {
+            "type": "integer",
+            "title": "To Compute"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "reusable",
+          "to_compute",
+          "items"
+        ],
+        "title": "Preview"
+      },
+      "Replay": {
+        "properties": {
+          "keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 1000,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keys"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Replay"
+      },
+      "Resolution": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "attach",
+              "resubmit",
+              "abandon"
+            ],
+            "title": "Action"
+          },
+          "call_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Id",
+            "description": "attach: the Modal FunctionCall ID you found for this job"
+          },
+          "input": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "resubmit: the original input; it must match the stored hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "Resolution",
+        "description": "How an operator settles a job whose submission outcome is uncertain.",
+        "examples": [
+          {
+            "action": "attach",
+            "call_id": "fc-01JABCDEF"
+          },
+          {
+            "action": "resubmit",
+            "input": {
+              "value": 12
+            }
+          },
+          {
+            "action": "abandon"
+          }
+        ]
+      },
+      "RunSpec": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "function": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Function"
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Revision",
+            "description": "Change when code, model, prompts or preprocessing change"
+          },
+          "namespace": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Namespace",
+            "default": "default"
+          },
+          "max_in_flight": {
+            "type": "integer",
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Max In Flight",
+            "default": 4
+          },
+          "reuse_successes": {
+            "type": "boolean",
+            "title": "Reuse Successes",
+            "default": true
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "function",
+          "revision",
+          "items"
+        ],
+        "title": "RunSpec",
+        "examples": [
+          {
+            "function": "documents",
+            "items": [
+              {
+                "input": {
+                  "text": "Our handbook explains how we work."
+                },
+                "key": "intro"
+              }
+            ],
+            "max_in_flight": 2,
+            "name": "handbook",
+            "namespace": "handbook",
+            "revision": "bge-small-chunks-v1"
+          }
+        ]
+      },
+      "RunView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "function": {
+            "type": "string",
+            "title": "Function"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Mode"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "paused",
+              "needs_attention",
+              "completed"
+            ],
+            "title": "Status"
+          },
+          "max_in_flight": {
+            "type": "integer",
+            "title": "Max In Flight"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "function",
+          "revision",
+          "namespace",
+          "mode",
+          "status",
+          "max_in_flight",
+          "counts",
+          "total",
+          "created_at"
+        ],
+        "title": "RunView"
+      },
       "Submission": {
         "properties": {
           "function": {
@@ -422,6 +1551,17 @@
           },
           "input": {
             "$ref": "#/components/schemas/JsonValue"
+          },
+          "on_complete": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Callback"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional completion callback"
           }
         },
         "additionalProperties": false,
@@ -496,7 +1636,7 @@
     },
     {
       "name": "Operations",
-      "description": "Gateway health; no Modal compute is invoked."
+      "description": "Health, metrics and reconciling uncertain submissions."
     }
   ]
 }

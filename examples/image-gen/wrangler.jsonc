@@ -1,0 +1,8 @@
+{
+  "name": "modal-bridge-image-gen",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-09",
+  // Set by `modal-bridge deploy`; see .modal-bridge.env. Secrets go in via `modal-bridge worker-secrets .`
+  "vars": {"BRIDGE_URL": "https://replace-with-your-gateway.modal.run"},
+  "r2_buckets": [{"binding": "IMAGES", "bucket_name": "modal-bridge-images"}]
+}

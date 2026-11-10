@@ -21,3 +21,8 @@ jobs:
         working-directory: examples/worker
         env:
           WRANGLER_SEND_METRICS: "false"
+      - run: npx wrangler deploy --dry-run
+        working-directory: examples/image-gen
+        env:
+          WRANGLER_SEND_METRICS: "false"
+      - run: node packages/create-modal-bridge/bin.mjs "$RUNNER_TEMP/scaffold" --skip-deploy

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="330" viewBox="0 0 1120 330" role="img" aria-labelledby="title desc">
+<title id="title">Submit, return, get called back</title><desc id="desc">A Cloudflare Worker submits a job to the Modal Bridge gateway with an idempotency key and a callback URL, and returns to the user immediately. The gateway spawns the Modal GPU function. When it settles, the gateway sends a signed webhook back to the Worker, which stores the result in R2.</desc>
+<defs><marker id="tip" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 7 3.5 0 7" fill="none" stroke="#667085"/></marker></defs>
+<rect width="1120" height="330" rx="12" fill="#fafaf9"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="40" y="42" fill="#737373" font-size="12" letter-spacing="2">EVENT-DRIVEN JOBS</text>
+<text x="40" y="80" fill="#171717" font-size="28" font-weight="700">Submit. Return. Get called back.</text>
+<g fill="white" stroke="#d4d4d4"><rect x="40" y="118" width="220" height="150" rx="8"/><rect x="330" y="118" width="220" height="150" rx="8"/><rect x="620" y="118" width="220" height="150" rx="8"/><rect x="910" y="118" width="170" height="150" rx="8"/></g>
+<g fill="#737373" font-size="12"><text x="60" y="145">CLOUDFLARE WORKER</text><text x="350" y="145">MODAL BRIDGE GATEWAY</text><text x="640" y="145">YOUR MODAL FUNCTION</text><text x="930" y="145">R2</text></g>
+<g font-family="Menlo, Consolas, monospace" font-size="14" fill="#171717"><text x="60" y="178">bridge.submit()</text><text x="350" y="178">POST /v1/jobs</text><text x="640" y="178">generate(payload)</text><text x="930" y="178">images/…jpg</text></g>
+<g fill="#525252" font-size="13"><text x="60" y="206">fetch only, no gRPC</text><text x="60" y="228">returns a job ID at once</text><text x="60" y="250">verifyWebhook() on callback</text><text x="350" y="206">idempotency ledger</text><text x="350" y="228">hosted in your workspace</text><text x="350" y="250">signs and retries callbacks</text><text x="640" y="206">CPU or GPU</text><text x="640" y="228">one JSON argument</text><text x="640" y="250">returns JSON</text><text x="930" y="206">written by the</text><text x="930" y="228">webhook handler</text></g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#tip)"><path d="M260 170 H320"/><path d="M550 170 H610"/><path d="M330 248 H270" stroke="#16a34a"/></g>
+<path d="M610 196 H560" stroke="#667085" stroke-width="1.5" fill="none" stroke-dasharray="4 4" marker-end="url(#tip)"/>
+<path d="M150 268 V292 H995 V278" stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#tip)"/>
+<text x="268" y="312" fill="#525252" font-size="13"><tspan fill="#16a34a" font-weight="700">Signed webhook</tspan> when the job settles: retried with backoff, at-least-once. Nothing polls the GPU.</text>
+</g></svg>
