@@ -1,4 +1,7 @@
-"""One durable scheduler per database. Run: python -m modal_bridge.runner."""
+"""One durable scheduler per database. Run: python -m modal_bridge.runner.
+
+Settles jobs without a client polling, delivers completion callbacks, applies
+retention, and dispatches batch runs."""
 import fcntl
 import logging
 import os
@@ -27,10 +30,11 @@ def main():
     logging.basicConfig(level=logging.INFO)
     logging.info('Run scheduler started; global in-flight cap: 32')
     while not stopping:
-        try:
-            runs.tick()
-        except Exception:
-            logging.exception('Scheduler tick failed; will retry polling without resubmitting uncertain work')
+        for tick in (app.state.reconciler.tick, runs.tick):
+            try:
+                tick()
+            except Exception:
+                logging.exception('Scheduler tick failed; will retry polling without resubmitting uncertain work')
         time.sleep(1)
     lock.close()
 

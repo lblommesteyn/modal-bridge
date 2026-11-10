@@ -105,7 +105,7 @@ def test_terminal_state_cannot_be_overwritten(tmp_path):
     store.attach(row["id"], "fc-1")
     store.update(row["id"], {"status": "succeeded", "result": 1})
     store.update(row["id"], {"status": "cancel_requested"})
-    assert 'succeeded' in store.get(row["id"])["state"]
+    assert store.get(row["id"])["state"] == {"status": "succeeded", "result": 1}
 
 def test_body_limit_and_unknown_job(setup):
     client, _, _ = setup
