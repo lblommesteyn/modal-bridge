@@ -8,6 +8,21 @@ export interface Job<T = Json> {
   result?: T;
   error?: string;
 }
+export interface RunSpec<I = Json> {
+  name: string; function: string; revision: string;
+  namespace?: string; max_in_flight?: number; reuse_successes?: boolean;
+  items: { key: string; input: I }[];
+}
+export interface Run {
+  id: string; name: string; function: string; revision: string; namespace: string;
+  mode: "active" | "paused";
+  status: "running" | "paused" | "needs_attention" | "completed";
+  max_in_flight: number; counts: Record<string, number>; total: number; created_at: number;
+}
+export interface RunPreview {
+  total: number; reusable: number; to_compute: number;
+  items: { key: string; action: "reuse" | "compute"; source: string | null }[];
+}
 export interface Definition { input: unknown; output: unknown }
 export class BridgeError extends Error {
   constructor(message: string, public readonly status: number) { super(message); this.name = "BridgeError"; }
@@ -52,6 +67,19 @@ export class ModalBridge<Functions extends { [K in keyof Functions]: Definition 
   }
   cancel(id: string, options: { signal?: AbortSignal } = {}): Promise<Job> {
     return this.request(`/v1/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST", ...options });
+  }
+  previewRun<K extends keyof Functions & string>(spec: Omit<RunSpec<Functions[K]["input"]>, "function"> & { function: K }): Promise<RunPreview> {
+    return this.request("/v1/runs/preview", {method:"POST", body:JSON.stringify(spec)});
+  }
+  createRun<K extends keyof Functions & string>(spec: Omit<RunSpec<Functions[K]["input"]>, "function"> & { function: K }, options: {idempotencyKey: string}): Promise<Run> {
+    if (!options.idempotencyKey) throw new Error("An idempotencyKey is required");
+    return this.request("/v1/runs", {method:"POST", headers:{"Idempotency-Key":options.idempotencyKey}, body:JSON.stringify(spec)});
+  }
+  getRun(id: string): Promise<Run> { return this.request(`/v1/runs/${encodeURIComponent(id)}`); }
+  pauseRun(id: string): Promise<Run> { return this.request(`/v1/runs/${encodeURIComponent(id)}/pause`, {method:"POST"}); }
+  resumeRun(id: string): Promise<Run> { return this.request(`/v1/runs/${encodeURIComponent(id)}/resume`, {method:"POST"}); }
+  retryFailed(id: string, keys?: string[]): Promise<Run> {
+    return this.request(`/v1/runs/${encodeURIComponent(id)}/retry-failed`, {method:"POST", body:JSON.stringify({keys:keys ?? null})});
   }
   async wait<T = Json>(id: string, options: { timeoutMs?: number; intervalMs?: number; signal?: AbortSignal } = {}): Promise<T> {
     const timeoutMs = options.timeoutMs ?? 60_000;
