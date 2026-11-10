@@ -4,10 +4,12 @@
   "type": "module",
   "workspaces": [
     "packages/client",
-    "examples/worker"
+    "packages/create-modal-bridge",
+    "examples/worker",
+    "examples/image-gen"
   ],
   "scripts": {
-    "build": "tsc -p packages/client && tsc -p examples/worker --noEmit",
+    "build": "tsc -p packages/client && tsc -p examples/worker --noEmit && tsc -p examples/image-gen",
     "test": "npm run build && node --test packages/client/test/*.test.mjs",
     "test:workers": "node --test packages/client/test/workers.integration.mjs"
   },
