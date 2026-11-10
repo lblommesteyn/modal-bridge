@@ -264,6 +264,9 @@ def create_app(*, token: str, targets: dict[str, tuple[str, str]], db_path: str,
             store.update(job_id, {"status": "cancel_requested"})
         return view(store.get(job_id))
 
+    from .runs import Runs, router
+    app.state.runs = Runs(store, targets, backend)
+    app.include_router(router(app.state.runs, authenticate))
     return app
 
 
