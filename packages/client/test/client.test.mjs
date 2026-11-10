@@ -26,6 +26,15 @@ test('wait polls until success including JSON null', async () => {
 test('wait surfaces terminal failures', async () => {
   await assert.rejects(client(async () => json({status:'submission_unknown', error:'Inspect Modal'})).wait('x'), JobError);
 });
+test('wait keeps polling after cancellation is requested, since completion can race', async () => {
+  let polls = 0;
+  const won = client(async () => json(++polls < 3 ? {status:'cancel_requested'} : {status:'succeeded', result:9}));
+  assert.equal(await won.wait('x', {intervalMs:1}), 9);
+  assert.equal(polls, 3);
+  polls = 0;
+  const lost = client(async () => json(++polls < 2 ? {status:'cancel_requested'} : {status:'failed', error:'Remote execution failed'}));
+  await assert.rejects(lost.wait('x', {intervalMs:1}), e => e instanceof JobError && e.job.status === 'failed');
+});
 test('deadline aborts an in-flight fetch, not only polling sleeps', async () => {
   const c = client((url, {signal}) => new Promise((resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), {once:true});

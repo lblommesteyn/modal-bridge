@@ -97,7 +97,8 @@ export class ModalBridge<Functions extends { [K in keyof Functions]: Definition 
         controller.signal.throwIfAborted();
         const job = await this.get<T>(id, { signal: controller.signal });
         if (job.status === "succeeded") return job.result as T;
-        if (["failed", "expired", "submission_unknown", "cancel_requested"].includes(job.status)) throw new JobError(job);
+        // cancel_requested is not terminal: the gateway keeps polling Modal, and the job can still succeed.
+        if (["failed", "expired", "submission_unknown"].includes(job.status)) throw new JobError(job);
         await new Promise<void>((resolve, reject) => {
           const onAbort = () => { clearTimeout(pause); reject(controller.signal.reason); };
           const pause = setTimeout(() => { controller.signal.removeEventListener("abort", onAbort); resolve(); }, intervalMs);
