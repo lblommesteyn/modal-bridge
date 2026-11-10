@@ -125,8 +125,10 @@ What it demonstrates:
 - **Spend is bounded.** `max_containers=1` caps the app at one GPU, and `--owner-max-active`
   limits each visitor (the Worker sends a hashed client ID as `Bridge-Owner`).
 
-The first image after a quiet spell also waits for Modal to boot a container and load the
-model. No GPU on your Modal account yet? `IMAGE_GEN_GPU=none modal deploy ...` runs the same
+Measured on a warm L4 with a local gateway and `wrangler dev` (six images): 0.66-0.69 s of
+GPU inference, a 0.16 s submit round trip, and 1.3-2.4 s from click to image in R2. Most of
+the remainder is the reconciler's one-second tick. The first image after a quiet spell also
+waits for Modal to boot a container and load the model: about 40 s in one cold run. No GPU on your Modal account yet? `IMAGE_GEN_GPU=none modal deploy ...` runs the same
 function on CPU (about 20 seconds per image) so you can try the whole flow first.
 SDXL-Turbo has its own license; read it before commercial use.
 
