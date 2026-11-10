@@ -1,262 +1,302 @@
 # Modal Bridge
 
-Call allowlisted Modal functions from Cloudflare Workers using ordinary `fetch`.
-An unofficial, self-hosted HTTP gateway and dependency-free typed TypeScript client.
-Not affiliated with Modal or Cloudflare. Self-hosted v0.1; the client is not published to npm yet.
+Run GPU-powered background jobs on Modal from Cloudflare Workers, using ordinary `fetch`.
+Submit a job, return to your user at once, and receive a signed webhook when it finishes.
+
+An unofficial HTTP gateway plus a dependency-free typed TypeScript client.
+Not affiliated with Modal or Cloudflare.
 
 [![CI](https://github.com/lblommesteyn/modal-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/lblommesteyn/modal-bridge/actions/workflows/ci.yml)
 
-![Architecture: a Worker calls the HTTP gateway, which persists job records and invokes Modal](docs/assets/architecture.svg)
+![Text-to-image demo: a Worker submits a prompt, a Modal GPU generates the image, a signed webhook stores it in R2](docs/assets/image-gen.png)
 
-[Quick start](#quick-start) · [Try Swagger](#try-the-api-in-swagger) · [TypeScript](#typescript) · [API contract](docs/openapi.json) · [Architecture](docs/architecture.md)
+```ts
+import { ModalBridge, verifyWebhook } from "@modal-bridge/client";
 
-## Do you need a gateway?
+// In your Worker: start a GPU job and return immediately.
+const bridge = new ModalBridge<Functions>({ url: env.BRIDGE_URL, token: env.BRIDGE_TOKEN });
+const job = await bridge.submit("generate", { prompt }, {
+  idempotencyKey: requestId,                              // a retry never pays for a second GPU run
+  onComplete: { url: "https://my-app.dev/webhooks/modal-bridge" },
+});
+
+// Later, in the same Worker: Modal Bridge calls you when the job settles.
+const event = await verifyWebhook(request, env.BRIDGE_WEBHOOK_SECRET);
+await env.IMAGES.put(`${event.job.id}.jpg`, decode(event.job.result.image_base64));
+```
+
+[Quick start](#quick-start) · [Image generation example](#example-image-generation-from-a-worker) · [Callbacks](#completion-callbacks) · [API](#api-and-guarantees) · [Uncertain submissions](#resolving-uncertain-submissions) · [Architecture](docs/architecture.md)
+
+## Why
+
+Modal's official JavaScript SDK talks gRPC and targets Node, Deno and Bun. It does
+not run in Cloudflare Workers ([modal-client#4124](https://github.com/modal-labs/modal-client/issues/4124)).
+Modal Bridge puts a small HTTP contract in front of your Modal functions:
+
+- **Edge-compatible.** The client is `fetch` and Web Crypto only. No Node compatibility flag.
+- **Nothing to host.** The gateway deploys into your own Modal workspace and scales to zero.
+- **Idempotent submissions.** Same key and input returns the original job, so retries are safe.
+- **Event-driven.** A signed, retried webhook on completion. Polling is optional.
+- **Honest about failure.** Uncertain submissions are quarantined and resolved explicitly, never silently re-run.
+
+## Do you need it?
 
 For a single endpoint, **start with Modal's own HTTP support**. A small FastAPI app
-hosted on Modal can submit jobs and expose their results without another server.
-Modal already documents this [job-processing pattern](https://modal.com/docs/guide/job-queue).
-
-Use this gateway when you want persistent request-key deduplication, a shared
-function allowlist, and cached results behind one HTTP contract. Its cost is another
-service to operate and one extra network hop. The current SQLite implementation
-runs on a regular Python host with persistent local disk.
+hosted on Modal can submit jobs and expose their results without anything else.
+Modal documents this [job-processing pattern](https://modal.com/docs/guide/job-queue).
 
 | Your requirement | Simplest fit |
 | --- | --- |
-| Call one function over HTTP | Modal Web Function |
-| Submit and poll asynchronous work | FastAPI hosted on Modal |
-| Persistent deduplication and result caching across functions | Modal Bridge |
-| Multiple gateway replicas or tenant isolation | A future shared-store design; not v0.1 |
-
-See the [architecture decision](docs/architecture.md) for trade-offs and the next
-serverless deployment option. Modal credentials stay on the gateway; the Worker
-holds a separate gateway token.
-
-## Included
-
-- Fetch-only TypeScript client: typed submissions, status, bounded polling, cancellation.
-- Authenticated FastAPI gateway with a server-controlled function allowlist.
-- Persistent SQLite job IDs, result caching and atomic idempotency reservations.
-- CPU-only Modal example and a protected Cloudflare Worker example.
-- Swagger UI with bearer authorization, request examples and typed response schemas.
-- Unit/API tests, Wrangler bundle check, Docker configuration and CI.
+| Call one function over HTTP | Modal web endpoint |
+| Submit and poll one function | FastAPI hosted on Modal |
+| Idempotent submissions, completion webhooks and one typed contract across functions | Modal Bridge |
+| Tenant isolation with per-tenant credentials | Not yet; this serves one trusted workspace |
 
 ## Quick start
 
-Requires Python 3.12+, uv, and Node 22+. From the repository root:
+You need [uv](https://docs.astral.sh/uv/), a Modal account (`uvx modal setup`), and a
+Modal function that is already deployed. Bridge functions take **one JSON argument**
+and return JSON.
 
 ```sh
-uv sync --frozen
-npm ci
-npm run build
-uv run modal setup
-uv run modal deploy examples/modal_app.py
+uvx --from git+https://github.com/lblommesteyn/modal-bridge modal-bridge deploy \
+  --target my-modal-app/my_function
 ```
 
-The last two commands authenticate and deploy a small CPU function to your Modal
-account. Calling it incurs normal Modal usage. No GPU is required.
-
-Run the gateway in a terminal with your Modal credentials configured:
+That command checks the function exists, generates a gateway token and webhook
+secret, stores them in a Modal Secret, deploys the gateway into your workspace and
+prints its URL. Credentials are written to `.modal-bridge.env` (owner-only) and are
+never printed. Run it again at any time to add targets; add `--rotate` for new credentials.
 
 ```sh
-uv run python scripts/setup_local.py
-uv run uvicorn modal_bridge.app:from_env --factory --host 127.0.0.1 --port 8000
+# Run a job end to end from your terminal
+uvx --from git+https://github.com/lblommesteyn/modal-bridge modal-bridge call my_function '{"value": 12}'
+
+# Give a Worker the token and webhook secret
+modal-bridge worker-secrets ./my-worker --local   # writes .dev.vars for `wrangler dev`
+modal-bridge worker-secrets ./my-worker           # `wrangler secret put`, piped so nothing is displayed
 ```
 
-The setup command generates a random gateway token in `.env` with owner-only file permissions; it never prints the token. `.env` is ignored by Git. The gateway loads that file automatically and uses your active Modal profile. For hosted deployments, use `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` instead.
-
-The gateway creates `data/jobs.sqlite`. Configure
-`BRIDGE_DB` to use another persistent path. Do not put this database on an ephemeral
-serverless filesystem or a network filesystem. Use one gateway replica for v0.1.
-
-In another terminal, load the token from `.env` without displaying it, then submit a job:
+To scaffold a Worker and deploy the gateway in one step:
 
 ```sh
-export BRIDGE_TOKEN="$(uv run python -c 'from dotenv import dotenv_values; print(dotenv_values(".env")["BRIDGE_TOKEN"])')"
-curl http://127.0.0.1:8000/v1/jobs \
-  -H "Authorization: Bearer $BRIDGE_TOKEN" \
-  -H 'Idempotency-Key: square-demo-001' \
-  -H 'Content-Type: application/json' \
-  -d '{"function":"square","input":{"value":12}}'
+npx create-modal-bridge my-app --target my-modal-app/my_function
 ```
 
-Copy the returned `id` into `GET /v1/jobs/<id>` with the same Authorization header.
-The successful result is `{"value":144}`. Interactive API docs: `/docs`.
+> The npm packages (`@modal-bridge/client`, `create-modal-bridge`) are prepared in this
+> repository but not published yet. Until they are, build the client with `npm run build`
+> and install it with `npm pack --workspace @modal-bridge/client`.
 
-## Try the API in Swagger
+### What gets deployed
 
-Open [Swagger UI](http://127.0.0.1:8000/docs) after starting the real gateway.
-Click **Authorize** and enter your `BRIDGE_TOKEN` from the private `.env` file,
-without the `Bearer` prefix. There is no shared production token.
+One Modal app (default name `modal-bridge`) with three CPU functions and two Modal Dicts:
 
-1. Open **POST /v1/jobs**, choose **Try it out**, and use the square example with
-   `Idempotency-Key: square-first-request`.
-2. Execute and copy the returned `id`.
-3. Poll **GET /v1/jobs/{job_id}** until the result is `{"value":144}`.
-4. Resubmit the same input and key to receive the same job ID. Changing input with
-   that key returns a `409` conflict.
+| Piece | Role |
+| --- | --- |
+| `gateway` | The HTTP API. Scales to zero; several containers can serve at once. |
+| `watch` | Waits on each submitted job and delivers its callback the moment it settles. |
+| `reconcile` | Runs every minute: settles anything a watcher missed, retries failed callbacks, quarantines crashed submissions. |
+| `modal-bridge-jobs`, `modal-bridge-unsettled` | The job ledger. Modal expires entries after 7 idle days, which is the retention period. |
 
-These requests execute real Modal functions and incur normal compute usage.
-The gateway also serves `/redoc` and `/openapi.json`. Job routes require bearer
-authentication; documentation is public. Swagger does not persist tokens across
-reloads. UI assets load from a CDN. You can import the checked-in
-[OpenAPI contract](docs/openapi.json) into other API clients.
+Remove everything with `modal app stop modal-bridge`.
 
-## TypeScript
+## Example: image generation from a Worker
 
-The workspace already links the client locally. For another repository, run
-`npm pack --workspace @modal-bridge/client` after building and install the resulting
-tarball. The package name is provisional, not an existing published dependency.
+[`examples/image-gen`](examples/image-gen) is a complete app: one Worker serves the page,
+starts SDXL-Turbo on a Modal GPU, and stores the result in R2 when the webhook arrives.
 
-```ts
-import { ModalBridge } from "@modal-bridge/client";
+![A Worker submits a job and returns; the gateway spawns the Modal function and later sends a signed webhook; the Worker stores the result in R2](docs/assets/webhook-flow.svg)
 
-type Functions = {
-  square: { input: { value: number }; output: { value: number } };
-};
-const bridge = new ModalBridge<Functions>({
-  url: env.BRIDGE_URL,
-  token: env.BRIDGE_TOKEN,
-});
-const job = await bridge.submit("square", { value: 12 }, {
-  idempotencyKey: "customer-request-unique-id",
-});
-const current = await bridge.get<{ value: number }>(job.id);
-// For scripts or short jobs; HTTP handlers should normally return the job ID.
-const result = await bridge.wait<{ value: number }>(job.id, { timeoutMs: 30_000 });
-// await bridge.cancel(job.id);
+```sh
+uv run modal deploy examples/image-gen/modal_app.py           # GPU function; the first build downloads the weights
+uv run modal-bridge deploy --target generate=modal-bridge-image-gen/generate --owner-max-active 2
+cd examples/image-gen
+npx wrangler r2 bucket create modal-bridge-images
+uv run modal-bridge worker-secrets . --env-file ../../.modal-bridge.env
+# set BRIDGE_URL in wrangler.jsonc to the URL printed by deploy, then:
+npx wrangler deploy
 ```
 
-Types are compile-time assistance, not runtime result validation. Validate important
-results in your application. `wait` timeout or abort stops local waiting; it does not
-cancel remote work. Network/HTTP errors are returned to the caller, not retried
-silently. Retry submission using the **same** idempotency key and input.
+What it demonstrates:
 
-## Cloudflare Worker example
+- **The Worker never waits on the GPU.** `POST /api/generate` returns a job ID in one round trip.
+- **The webhook writes to R2.** The browser reads job state from R2, so nothing polls Modal.
+- **Retries are free.** The browser's request ID is the idempotency key.
+- **Spend is bounded.** `max_containers=1` caps the app at one GPU, and `--owner-max-active`
+  limits each visitor (the Worker sends a hashed client ID as `Bridge-Owner`).
 
-1. Set `BRIDGE_URL` in `examples/worker/wrangler.jsonc` to your gateway's HTTPS URL.
-2. From `examples/worker`, run `npx wrangler secret put BRIDGE_TOKEN` and enter the
-   gateway token. Run `npx wrangler secret put EXAMPLE_TOKEN` with a different random
-   token for callers of this example.
-3. From the repository root run `npm run build`, then
-   `npm run deploy --workspace modal-bridge-worker-example`.
-4. Send `POST /jobs` with `{"value":12}`, `Authorization: Bearer <EXAMPLE_TOKEN>`,
-   and `Idempotency-Key`. Poll `GET /jobs/<id>` or `POST /jobs/<id>/cancel`.
+The first image after a quiet spell also waits for Modal to boot a container and load the
+model. No GPU on your Modal account yet? `IMAGE_GEN_GPU=none modal deploy ...` runs the same
+function on CPU (about 20 seconds per image) so you can try the whole flow first.
+SDXL-Turbo has its own license; read it before commercial use.
 
-For local Wrangler development, store these secrets in
-`examples/worker/.dev.vars` (ignored by git), and use a localhost gateway URL.
-This example uses one shared caller identity. It does not implement tenant isolation;
-add per-user authorization and job ownership checks before exposing a multi-user API.
+## Completion callbacks
+
+Pass `onComplete: { url }` (HTTP body: `"on_complete": {"url": "..."}`). When the job
+reaches `succeeded`, `failed` or `expired`, the gateway POSTs:
+
+```json
+{"type": "job.succeeded", "id": "<job id>", "created_at": 1794274299.47,
+ "job": {"id": "...", "function": "generate", "status": "succeeded", "result": {}, "completed_at": 1794274299.47}}
+```
+
+- **Signed.** Headers follow [Standard Webhooks](https://www.standardwebhooks.com/):
+  `webhook-id`, `webhook-timestamp`, and `webhook-signature: v1,<base64 HMAC-SHA256>` over
+  `id.timestamp.body`. Verify with `verifyWebhook(request, secret)`, or any Standard Webhooks library.
+- **Retried.** Any non-2xx response or network error is retried after 10 s, 1 min, 5 min,
+  30 min, 2 h, 6 h and 24 h. After eight attempts the callback is marked `failed`;
+  the job and its result remain readable by ID. Delivery state is durable and visible as `job.callback`.
+- **At-least-once.** A redelivery carries the same `webhook-id`. Make handlers idempotent.
+- **Restricted.** URLs must be HTTPS (HTTP only for localhost), are never redirected, and can
+  be limited with `--callback-hosts 'my-app.dev,*.workers.dev'`. Callers hold the gateway
+  token, so treat callback URLs as trusted-workspace input and set the allowlist in production.
+
+Callbacks are not sent for `submission_unknown`; that state is returned by the submit call
+itself and listed for operators (below). A cancelled job still gets exactly one callback
+with its real outcome.
 
 ## API and guarantees
 
-![Job flow: submit with a stable key, poll by job ID, read the result](docs/assets/job-flow.svg)
-
 | Route | Purpose |
 | --- | --- |
-| `GET /health` | Process liveness; does not check Modal connectivity |
-| `POST /v1/jobs` | Submit `{function,input}`; requires `Idempotency-Key`; returns 202 |
-| `GET /v1/jobs/{id}` | Poll and cache a completed JSON result |
+| `POST /v1/jobs` | Submit `{function, input, on_complete?}`; requires `Idempotency-Key`; optional `Bridge-Owner`; returns 202 |
+| `GET /v1/jobs/{id}` | Read a job; refreshes pending work from Modal and caches the result |
+| `GET /v1/jobs?status=&owner=&limit=` | List jobs, newest first, without results |
 | `POST /v1/jobs/{id}/cancel` | Request cancellation without terminating shared containers |
+| `POST /v1/jobs/{id}/resolve` | Settle an uncertain submission: `attach`, `resubmit` or `abandon` |
+| `GET /v1/metrics` | Job and callback counts, Modal call latency, concurrency saturation |
+| `GET /health` | Process liveness; does not check Modal connectivity |
 
-All job routes require the gateway bearer token. A token grants access to all jobs
-in this gateway. Function aliases resolve to `[Modal app name, function name]` in
-`BRIDGE_TARGETS`. Functions take **one JSON argument** and return JSON. Input and
-serialized output limits are 1 MiB. For large artifacts, return R2/S3 references.
-Non-JSON/oversized results become failed jobs; the original computation may have succeeded.
+Every route except `/health` requires the gateway bearer token, and a token grants access
+to all jobs. Interactive docs are served at `/docs`; the contract is checked in as
+[`docs/openapi.json`](docs/openapi.json). Input and serialized output are limited to 1 MiB:
+return object-storage references for larger artifacts. Non-JSON or oversized results become
+failed jobs even though the computation may have succeeded.
 
-| Status | Meaning |
-| --- | --- |
-| `submitting` | Reservation created; spawn not yet recorded |
-| `pending` | No result available; does not distinguish queued from running |
-| `succeeded` | JSON result cached durably |
-| `failed` | Execution or result contract failed; inspect Modal logs |
-| `expired` | Modal output expired before the gateway cached it |
-| `cancel_requested` | Modal accepted cancellation; completion can still race |
-| `submission_unknown` | Spawn or recording failed; work may already exist |
+| Status | Final? | Meaning |
+| --- | --- | --- |
+| `submitting` | no | Key reserved; spawn not yet recorded |
+| `pending` | no | No result yet; does not distinguish queued from running |
+| `cancel_requested` | no | Modal accepted cancellation; the job can still succeed, fail or expire |
+| `succeeded` | yes | JSON result cached |
+| `failed` | yes | Execution or result contract failed; inspect Modal logs with `call_id` |
+| `expired` | yes | Modal's output expired before the gateway cached it |
+| `submission_unknown` | until resolved | Spawn or recording failed; work may already exist |
 
-Same key + same input returns the original job. Same key + different input returns
-409. Keys remain reserved for the lifetime of the database. The gateway stores input
-hashes, not input bodies. There is no automatic replay, input archive, or exactly-once
-execution guarantee. Your functions must tolerate repeated execution where needed.
+Each job also reports `target` (the Modal app/function its alias resolved to), `call_id`,
+`owner`, `created_at`, `submitted_at`, `completed_at`, `updated_at` and `callback` state.
+`completed_at` is when the gateway recorded the outcome, not when Modal finished.
 
-**Crash boundary:** SQLite and Modal cannot commit atomically. If the gateway dies
-between reserving a key and recording a Modal call ID, the job remains `submitting`.
-If a caught submission error occurs, it becomes `submission_unknown`. Neither is
-silently resubmitted. Inspect the corresponding Modal app and reconcile manually
-before using a new key. A client HTTP timeout does not prove submission failed.
+**Idempotency.** Same key and same input returns the original job. Same key with a
+different input, callback URL or owner returns 409. The gateway stores input hashes, not
+input bodies. There is no exactly-once guarantee: your functions must tolerate repeated
+execution where it matters.
 
-Results are refreshed on GET, not by a background reconciler. Poll before Modal's
-output retention expires. Cancellation is a request, not proof that side effects
-were stopped; a canceled call can later appear failed or expired through Modal's
-result API. Built-in Python `TimeoutError` from a user function is indistinguishable
-from an empty poll through this adapter: use a different application exception type.
+**Cancellation.** `cancel_requested` is not a final state. `wait()` and callbacks keep going
+until the job is truly settled: normally `failed`, or `succeeded` if it finished first.
 
-## Deploying the gateway
+**Quotas.** `--owner-max-active` and `--owner-max-daily` cap jobs per `Bridge-Owner` value
+and return 429. They count jobs, not dollars; cap spend with `max_containers` on your Modal
+functions. Replays of an existing key are never throttled. On the Modal-hosted ledger the
+daily counter is approximate under heavy concurrency.
 
-Copy `.env.example` to `.env`, replace all placeholders, then:
+**Back-pressure.** At most `BRIDGE_MAX_MODAL_CONCURRENCY` (default 32) Modal SDK calls run
+per gateway process. Beyond that, requests wait up to five seconds and then get 503 with
+`Retry-After`, before any key is reserved. `scripts/load_test.py` measures this offline.
+
+**Other limits.** A built-in Python `TimeoutError` raised by your function is
+indistinguishable from an empty poll: raise a different exception type. Types in the
+client are compile-time only; validate important results at runtime.
+
+## Resolving uncertain submissions
+
+The ledger and Modal cannot commit atomically. If a spawn call errors, or the gateway
+dies between reserving a key and recording the Modal call, the job becomes
+`submission_unknown` (reservations stuck in `submitting` are moved there after two
+minutes). Nothing is re-run automatically. Instead:
+
+```ts
+const stuck = await bridge.list({ status: "submission_unknown" });
+// Look in the Modal dashboard for a call to stuck[0].target around stuck[0].created_at, then:
+await bridge.resolve(id, { action: "attach", call_id: "fc-..." });      // found it: track that call
+await bridge.resolve(id, { action: "abandon" });                         // it never ran: mark failed
+await bridge.resolve(id, { action: "resubmit", input: originalInput });  // run it (again)
+```
+
+`attach` verifies the call ID with Modal first. `resubmit` is the only action that can
+execute work twice, so it requires the original input and checks it against the stored
+hash. Each resolution is a compare-and-set, and the job then continues normally,
+including its callback.
+
+## TypeScript client
+
+```ts
+type Functions = { square: { input: { value: number }; output: { value: number } } };
+const bridge = new ModalBridge<Functions>({ url: env.BRIDGE_URL, token: env.BRIDGE_TOKEN });
+
+const job = await bridge.submit("square", { value: 12 }, { idempotencyKey: "order-1841" });
+const current = await bridge.get(job.id);
+const result = await bridge.wait<{ value: number }>(job.id, { timeoutMs: 30_000 }); // scripts and short jobs
+await bridge.cancel(job.id);
+```
+
+A `wait` timeout or abort stops local waiting; it does not cancel remote work. Network and
+HTTP errors are surfaced, not retried silently: retry a submission with the **same**
+idempotency key and input. Keep the token in server-side secrets, never in browser code.
+
+## Self-hosting with SQLite
+
+The Modal-hosted gateway is the default. Run your own host when you want the full job
+history in SQL, a configurable retention period, or batch runs.
 
 ```sh
+cp .env.example .env    # fill in the placeholders
 docker compose up --build -d
 ```
 
-Compose binds to localhost. Put an HTTPS reverse proxy in front of it for remote
-Workers. Preserve the `bridge-data` volume. The image runs as a non-root user.
-Protect the gateway token as a backend secret; never put it in browser JavaScript.
-Use access controls and rate limits at your reverse proxy. Back up the database;
-results can contain sensitive data. Modal output deserialization trusts your
-allowlisted functions and workspace. This is not an untrusted-code execution API.
+Compose starts the API and a `runner` process that settles jobs, delivers callbacks and
+applies `BRIDGE_RETENTION_DAYS`. It binds to localhost: put an HTTPS reverse proxy in
+front. Keep the `bridge-data` volume on persistent local disk, run one replica, and back
+it up; results can contain sensitive data. A v0.1 database is upgraded in place on start.
+Purging a settled job frees its idempotency key.
 
-## Development and validation
+This mode also exposes `/v1/runs`: versioned batch manifests with per-run concurrency,
+pause and resume, reuse of earlier successes, and retry of confirmed failures. See
+`/docs` on a running gateway.
 
-```sh
-uv run pytest -q
-uv run python scripts/export_openapi.py
-npm test
-npm run test:workers
-cd examples/worker
-npx wrangler deploy --dry-run
-```
-
-Unit tests use fake Modal calls and require no credentials or paid compute.
-For an end-to-end check, deploy `examples/modal_app.py`, run `scripts/setup_local.py`,
-start the gateway, and run:
+## Development
 
 ```sh
-BRIDGE_URL=http://127.0.0.1:8000 uv run python scripts/smoke_live.py
+uv sync --frozen && npm ci
+uv run pytest -q                          # gateway, both ledgers, fake Modal; no credentials needed
+npm test && npm run test:workers          # client, including the real Workers runtime
+uv run python scripts/export_openapi.py   # after changing routes or models
+uv run python scripts/load_test.py        # offline latency and back-pressure check
 ```
 
-This invokes real CPU functions and checks success, duplicate submissions, conflicts,
-remote failure and cancellation. It requires the square, fail and slow aliases set
-by the setup script. The test-only simulator remains available through
-`modal_bridge.demo:create_demo_app` for offline development, but is never selected
-by the gateway entrypoint.
+For a live check against real Modal CPU functions, deploy `examples/modal_app.py`, run
+`scripts/setup_local.py`, start `uvicorn modal_bridge.app:from_env --factory`, and run
+`BRIDGE_URL=http://127.0.0.1:8000 uv run python scripts/smoke_live.py`.
+`modal_bridge.demo:create_demo_app` is an offline simulator for trying Swagger without an account.
 
- Adapter tests
-exercise the installed SDK's exception classes. A successful dry-run checks bundling,
-not a live Cloudflare deployment. Repeat live checks in your target deployment environment before production use.
+## Scope and roadmap
 
-## Current scope
+Modal Bridge serves a single trusted workspace: one token, one set of functions.
+Modal output deserialization trusts your allowlisted functions. It is not an
+untrusted-code execution API.
 
-This release supports a single trusted workspace on one persistent gateway host.
-A public GitHub repository does not host your gateway. Use Docker on an HTTPS host
-for an internet-facing API; the Worker must point to that host rather than localhost.
+Next: artifact upload helpers for results over 1 MiB, opt-in input capture for replay,
+runtime result schemas, per-tenant keys, and a PostgreSQL ledger if multi-region
+self-hosting turns out to matter.
 
-## Next milestones
-
-- Authenticated completion callbacks with delivery retries.
-- Opt-in input capture, failure inspection and explicit replay.
-- R2 artifact example and runtime schemas.
-- PostgreSQL support, per-tenant keys, retention policies and operational metrics.
-
-Keep contributions focused; include failure-path tests for changes to submission,
-cancellation or persistence. Report security issues privately to the repository
-maintainer rather than posting credentials or sensitive job contents in an issue.
+Contributions are welcome: keep them focused and include failure-path tests for changes
+to submission, cancellation, callbacks or persistence. Report security issues privately
+to the maintainer.
 
 ## References
 
-- [Modal FunctionCall API](https://modal.com/docs/sdk/py/latest/FunctionCall)
-- [Modal Function lookup](https://modal.com/docs/guide/function-lookup)
+- [Modal FunctionCall API](https://modal.com/docs/sdk/py/latest/FunctionCall) · [Modal Dicts](https://modal.com/docs/guide/dicts-and-queues)
 - [Reported Workers SDK transport limitation](https://github.com/modal-labs/modal-client/issues/4124)
+- [Standard Webhooks](https://www.standardwebhooks.com/)
 
 MIT licensed.
