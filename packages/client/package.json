@@ -1,7 +1,7 @@
 {
   "name": "@modal-bridge/client",
-  "version": "0.1.0",
-  "description": "Fetch-only typed client for the unofficial Modal Bridge gateway",
+  "version": "0.2.0",
+  "description": "Fetch-only typed client for Modal Bridge: run Modal jobs from Cloudflare Workers and other edge runtimes",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -22,5 +22,25 @@
   "homepage": "https://github.com/lblommesteyn/modal-bridge#readme",
   "bugs": {
     "url": "https://github.com/lblommesteyn/modal-bridge/issues"
+  },
+  "keywords": [
+    "modal",
+    "cloudflare-workers",
+    "edge",
+    "gpu",
+    "jobs",
+    "webhooks",
+    "idempotency",
+    "fetch"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }

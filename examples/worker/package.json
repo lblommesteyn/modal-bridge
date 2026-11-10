@@ -2,7 +2,7 @@
   "name": "modal-bridge-worker-example",
   "private": true,
   "type": "module",
-  "dependencies": {"@modal-bridge/client": "0.1.0"},
+  "dependencies": {"@modal-bridge/client": "0.2.0"},
   "devDependencies": {"wrangler": "^4.0.0"},
   "scripts": {"dev": "wrangler dev", "deploy": "wrangler deploy"}
 }
