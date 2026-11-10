@@ -5,5 +5,13 @@ services:
     env_file: .env
     volumes: ["bridge-data:/data"]
     restart: unless-stopped
+  # Settles jobs without a client polling, delivers callbacks, applies retention, dispatches runs.
+  # Exactly one per database: it holds a file lock and exits if another runner owns it.
+  runner:
+    build: .
+    command: ["/app/.venv/bin/python", "-m", "modal_bridge.runner"]
+    env_file: .env
+    volumes: ["bridge-data:/data"]
+    restart: unless-stopped
 volumes:
   bridge-data:
