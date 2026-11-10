@@ -13,3 +13,4 @@ data/
 .env.*
 !.env.example
 *.tgz
+.modal-bridge.env
