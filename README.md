@@ -4,11 +4,7 @@ Run GPU-powered background jobs on Modal from Cloudflare Workers, using ordinary
 Submit a job, return to your user at once, and receive a signed webhook when it finishes.
 
 An unofficial HTTP gateway plus a dependency-free typed TypeScript client.
-Not affiliated with Modal or Cloudflare.
 
-[![CI](https://github.com/lblommesteyn/modal-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/lblommesteyn/modal-bridge/actions/workflows/ci.yml)
-
-![Text-to-image demo: a Worker submits a prompt, a Modal GPU generates the image, a signed webhook stores it in R2](docs/assets/image-gen.png)
 
 ```ts
 import { ModalBridge, verifyWebhook } from "@modal-bridge/client";
